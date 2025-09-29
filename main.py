@@ -41,9 +41,9 @@ if __name__ == "__main__":
     # -----------------------------
     # DataLoaders
     # -----------------------------
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
-    val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
-    test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, )
+    val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False, )
+    test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
     print("Train dataset:", len(train_dataset))
     print("Val dataset:", len(val_dataset))
