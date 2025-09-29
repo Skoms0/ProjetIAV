@@ -1,6 +1,7 @@
 # import statements for python, torch and companion libraries and your own modules
 import torch
 import torch.nn as nn
+from torchvision import transforms
 import os
 from glob import glob
 from pathlib import Path
@@ -20,6 +21,24 @@ from torchvision.models import (
     resnet50, ResNet50_Weights,
     efficientnet_b0, EfficientNet_B0_Weights
 )
+
+def get_preprocessing_transform(model_name, train=True):
+    model_name = model_name.lower()
+    if model_name == "convnext_tiny":
+        weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1
+    elif model_name == "resnet50":
+        weights = ResNet50_Weights.DEFAULT
+    elif model_name == "efficientnet_b0":
+        weights = EfficientNet_B0_Weights.IMAGENET1K_V1
+    else:
+        raise ValueError(f"Unsupported model: {model_name}")
+
+    base_transform = weights.transforms()
+    if train:
+        return transforms.Compose([transforms.RandomHorizontalFlip(), base_transform])
+    else:
+        return base_transform
+
 
 def get_model(config, device):
     """
@@ -53,136 +72,134 @@ def get_model(config, device):
     
     return model
 
-# device initialization
+def main():
+    # device initialization
 
-## Check if GPU is available
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    print("GPU detected. Using CUDA for training.")
-else:
-    print("No GPU detected. Training on CPU will be significantly slower. Please be sure of the model you are using before continuing.")
-    choice = input("Do you want to continue using CPU? (y/n): ").strip().lower()
-    if choice == "y":
-        device = torch.device("cpu")
-        print("Continuing on CPU...")
+    ## Check if GPU is available
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("GPU detected. Using CUDA for training.")
     else:
-        print("Exiting program. Please use a machine with GPU.")
-        exit()  # stops the program
+        print("No GPU detected. Training on CPU will be significantly slower. Please be sure of the model you are using before continuing.")
+        choice = input("Do you want to continue using CPU? (y/n): ").strip().lower()
+        if choice == "y":
+            device = torch.device("cpu")
+            print("Continuing on CPU...")
+        else:
+            print("Exiting program. Please use a machine with GPU.")
+            exit()  # stops the program
 
-print("Using device:", device)
+    print("Using device:", device)
 
-# instantiation of transforms, datasets and data loaders
-# TIP : use torch.utils.data.random_split to split the training set into train and validation subsets
+    # instantiation of transforms, datasets and data loaders
+    # TIP : use torch.utils.data.random_split to split the training set into train and validation subsets
 
-## Transforms
-from torchvision.models import ConvNeXt_Tiny_Weights
-from torchvision import transforms
-from torch.utils.data import DataLoader, random_split
-
-weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1
-
-### Training transform: include optional augmentation
-train_transform = transforms.Compose([
-    transforms.RandomHorizontalFlip(),  # simple augmentation for training
-    weights.transforms()                # official resize + center crop + normalize
-])
-
-### Validation / Test transform: deterministic
-val_transform = weights.transforms()
-
-## Datasets
-full_train_dataset = COCOTrainImageDataset(
-    img_dir=CONFIG["train_dir"],
-    annotations_dir=CONFIG["label_dir"],
-    transform=train_transform
-)
-
-image, label = full_train_dataset[0]
-print(type(image))  # <class 'torch.Tensor'>
-print(type(label))  # <class 'torch.Tensor'>
-print(image.shape)  # e.g., torch.Size([3, 224, 224])
-print(label.shape)  # torch.Size([80]) for multi-label
-
-test_dataset = COCOTestImageDataset(
-    img_dir=CONFIG["test_dir"],
-    transform=val_transform
-)
+    ## Transforms
+    from torch.utils.data import DataLoader, random_split
 
 
-## Train/Validation Split
-val_size = int(CONFIG["val_split"] * len(full_train_dataset))  # 20% validation
-train_size = len(full_train_dataset) - val_size
+    ### Training transform: include optional augmentation
+    train_transform = get_preprocessing_transform(CONFIG["model"], train=True)
 
-train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
+    ### Validation / Test transform: deterministic
+    val_transform   = get_preprocessing_transform(CONFIG["model"], train=False)
 
-## DataLoaders
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=CONFIG["batch_size"],
-    shuffle=True,
-    num_workers=CONFIG["max_cpus"]
-)
+    ## Datasets
+    full_train_dataset = COCOTrainImageDataset(
+        img_dir=CONFIG["train_dir"],
+        annotations_dir=CONFIG["label_dir"],
+        transform=train_transform
+    )
 
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=CONFIG["batch_size"],
-    shuffle=False,
-    num_workers=CONFIG["max_cpus"]
-)
-
-test_loader = DataLoader(
-    test_dataset,
-    batch_size=CONFIG["batch_size"],
-    shuffle=False,
-    num_workers=CONFIG["max_cpus"]
-)
-
-print("DataLoaders ready: train={}, val={}, test={}".format(
-    len(train_loader), len(val_loader), len(test_loader)
-))
+    test_dataset = COCOTestImageDataset(
+        img_dir=CONFIG["test_dir"],
+        transform=val_transform
+    )
 
 
-# instantiation and preparation of network model
-model = get_model(CONFIG, device)
-print(model)
+    ## Train/Validation Split
+    val_size = int(CONFIG["validation_split"] * len(full_train_dataset))  # 20% validation
+    train_size = len(full_train_dataset) - val_size
 
+    train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
 
-# instantiation of loss criterion
-criterion = torch.nn.BCEWithLogitsLoss()
+    ## DataLoaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=True,
+        num_workers=CONFIG["max_cpus"]
+    )
 
-# instantiation of optimizer, registration of network parameters
-if CONFIG["optimizer"].lower() == "adam":
-    optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
-elif CONFIG["optimizer"].lower() == "sgd":
-    optimizer = torch.optim.SGD(model.parameters(), lr=CONFIG["learning_rate"], momentum=0.9)
-else:
-    raise ValueError(f"Unsupported optimizer: {CONFIG['optimizer']}")
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=False,
+        num_workers=CONFIG["max_cpus"]
+    )
 
-# Tensorboard
-from torch.utils.tensorboard import SummaryWriter
-writer = SummaryWriter(log_dir="runs/experiment1")
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=False,
+        num_workers=CONFIG["max_cpus"]
+    )
 
-# definition of current best model path
-best_f1 = 0.0
-best_model_path = "best_model.pth"
-
-# main training loop
-for epoch in range(CONFIG["num_epochs"]):
-    ## Train
-    train_loss = train_loop(train_loader, model, criterion, optimizer, device)
+    print("DataLoaders ready: train={}, val={}, test={}".format(
+        len(train_loader), len(val_loader), len(test_loader)
+    ))
     
-    ## Validate
-    train_results = validation_loop(train_loader, model, criterion, num_classes=80, device=device, multi_task=True)
-    val_results = validation_loop(val_loader, model, criterion, num_classes=80, device=device, multi_task=True)
-    
-    ## Update graphs (optional)
-    update_graphs(writer, epoch, train_results, val_results)
-    
-    ## Save model if better
-    if val_results["f1"] > best_f1:
-        best_f1 = val_results["f1"]
-        torch.save(model.state_dict(), best_model_path)
-        print(f"New best model saved with F1={best_f1:.4f}")
+    image, label = next(iter(train_loader))
+    print(image.shape, label.shape)
 
-# close tensorboard SummaryWriter if created (optional)
-writer.close()
+
+
+    # instantiation and preparation of network model
+    model = get_model(CONFIG, device)
+
+
+    # instantiation of loss criterion
+    criterion = torch.nn.BCEWithLogitsLoss()
+
+    # instantiation of optimizer, registration of network parameters
+    if CONFIG["optimizer"].lower() == "adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
+    elif CONFIG["optimizer"].lower() == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(), lr=CONFIG["learning_rate"], momentum=0.9)
+    else:
+        raise ValueError(f"Unsupported optimizer: {CONFIG['optimizer']}")
+
+    # Tensorboard
+    from torch.utils.tensorboard import SummaryWriter
+    writer = SummaryWriter(log_dir="runs/experiment1")
+
+    # definition of current best model path
+    best_f1 = 0.0
+    best_model_path = "best_model.pth"
+
+    # main training loop
+    for epoch in range(CONFIG["num_epochs"]):
+        ## Train
+        train_loss = train_loop(train_loader, model, criterion, optimizer, device)
+        
+        ## Validate
+        train_results = validation_loop(train_loader, model, criterion, num_classes=80, device=device, multi_task=True)
+        val_results = validation_loop(val_loader, model, criterion, num_classes=80, device=device, multi_task=True)
+        
+        ## Update graphs (optional)
+        update_graphs(writer, epoch, train_results, val_results)
+        
+        ## Save model if better
+        if val_results["f1"] > best_f1:
+            best_f1 = val_results["f1"]
+            torch.save(model.state_dict(), best_model_path)
+            print(f"New best model saved with F1={best_f1:.4f}")
+
+    # close tensorboard SummaryWriter if created (optional)
+    writer.close()
+
+if __name__ == "__main__":
+    from multiprocessing import freeze_support
+    freeze_support()
+    main()
+
