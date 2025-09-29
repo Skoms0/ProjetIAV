@@ -9,6 +9,14 @@ class COCOTrainImageDataset(Dataset):
     def __init__(self, img_dir, labels_dir, transform=None):
         self.img_list = sorted(glob(os.path.join(img_dir, "*.jpg")))
         label_dict = {Path(f).stem: f for f in glob(os.path.join(labels_dir, "*.cls"))}
+
+        # Filtrer les images sans label
+        missing_labels = [img for img in self.img_list if Path(img).stem not in label_dict]
+        if missing_labels:
+            print(f"[WARNING] {len(missing_labels)} images n'ont pas de label et seront ignorées.")
+            for img in missing_labels[:5]:  # Affiche les 5 premiers fichiers manquants
+                print(f"  - {img}")
+
         self.img_list = [img for img in self.img_list if Path(img).stem in label_dict]
         self.label_list = [label_dict[Path(img).stem] for img in self.img_list]
         self.transform = transform
@@ -19,12 +27,16 @@ class COCOTrainImageDataset(Dataset):
     def __getitem__(self, idx):
         img_path = self.img_list[idx]
         labels_path = self.label_list[idx]
+
         image = Image.open(img_path).convert("RGB")
         if self.transform:
             image = self.transform(image)
+
+        # Lecture des labels et conversion en one-hot tensor
         with open(labels_path) as f:
-            labels = [int(x) for x in f.read().splitlines()]
-        labels_tensor = torch.zeros(80).scatter_(0, torch.tensor(labels), value=1)
+            labels = [int(x) for x in f.read().splitlines() if x.strip().isdigit()]
+
+        labels_tensor = torch.zeros(80).scatter_(0, torch.tensor(labels, dtype=torch.long), value=1)
         return image, labels_tensor
 
 class COCOTestImageDataset(Dataset):

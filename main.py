@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 import torchvision.transforms as transforms
 
 from dataset import COCOTrainImageDataset, COCOTestImageDataset
@@ -23,34 +23,63 @@ if __name__ == "__main__":
 
     transform = transforms.Compose([transforms.Resize((224,224)), transforms.ToTensor()])
 
-    train_dataset = COCOTrainImageDataset("ms-coco/images/train", "ms-coco/labels/train", transform)
-    val_dataset   = COCOTrainImageDataset("ms-coco/images/val", "ms-coco/labels/val", transform)
-    test_dataset  = COCOTestImageDataset("ms-coco/images/test", transform)
+    # -----------------------------
+    # Dataset complet train + validation
+    # -----------------------------
+    full_dataset = COCOTrainImageDataset("ms-coco/images/train-resized", "ms-coco/labels/train", transform)
 
+    # Split 80% train / 20% validation avec seed fixe
+    total_size = len(full_dataset)
+    train_size = int(0.8 * total_size)
+    val_size = total_size - train_size
+    generator = torch.Generator().manual_seed(42)
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=generator)
+
+    # Dataset test
+    test_dataset = COCOTestImageDataset("ms-coco/images/test", transform)
+
+    # -----------------------------
+    # DataLoaders
+    # -----------------------------
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4)
     val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
     test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=4)
 
+    print("Train dataset:", len(train_dataset))
+    print("Val dataset:", len(val_dataset))
+    print("Test dataset:", len(test_dataset))
+
+    # -----------------------------
+    # Modèle, perte et optimiseur
+    # -----------------------------
     model = ConvNeXtMultiLabel().to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.head.parameters(), lr=1e-3)
 
-    # TRAINING
+    # -----------------------------
+    # Entraînement
+    # -----------------------------
     for epoch in range(5):
         print(f"\nEpoch {epoch+1}")
         train_loop(train_loader, model, criterion, optimizer, device)
         val_loss = validation_loop(val_loader, model, criterion, device)
         print(f"Validation loss: {val_loss:.4f}")
 
-    # SAVE MODEL WEIGHTS JSON
+    # -----------------------------
+    # Sauvegarde du modèle
+    # -----------------------------
     save_model_weights_json(model)
 
-    # TEST + SAVE PREDICTIONS JSON
+    # -----------------------------
+    # Test et sauvegarde des prédictions
+    # -----------------------------
     results = predict_test(test_loader, model, device)
     with open("test_predictions.json", "w") as f:
         import json
         json.dump(results, f, indent=4)
     print("Predictions saved in test_predictions.json")
 
-    # VISUALISATION
+    # -----------------------------
+    # Visualisation
+    # -----------------------------
     visualize_predictions(test_loader, model, device, classes, threshold=0.5, n_images=5)
