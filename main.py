@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 import torchvision.transforms as transforms
 
+
+import os
 from dataset import COCOTrainImageDataset, COCOTestImageDataset
 from model import ConvNeXtMultiLabel
 from utils import train_loop, validation_loop, predict_test, save_model_weights_json, visualize_predictions
@@ -41,9 +43,12 @@ if __name__ == "__main__":
     # -----------------------------
     # DataLoaders
     # -----------------------------
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, )
-    val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False, )
-    test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False)
+    max_workers = os.cpu_count()  # or a safe number like min(8, os.cpu_count())
+    
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=max_workers, pin_memory=True)
+    val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=max_workers, pin_memory=True)
+    test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=max_workers, pin_memory=True)
+
 
     print("Train dataset:", len(train_dataset))
     print("Val dataset:", len(val_dataset))
