@@ -1,0 +1,18 @@
+{
+  "device": "cuda",
+  "train_image_dir": "ms-coco/images/train-resized",
+  "train_label_dir": "ms-coco/labels/train/train",
+  "test_image_dir": "ms-coco/images/test-resized",
+  "batch_size": 32,
+  "num_epochs": 15,
+  "learning_rate": 0.001,
+  "weight_decay": 0.01,
+  "train_val_split": 0.8,
+  "image_size": [224, 224],
+  "num_workers": 8,
+  "threshold": 0.5,
+  "n_images_visualize": 5,
+  "seed": 42,
+  "freeze_backbone": true,
+  "use_augmentation": true
+}
