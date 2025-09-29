@@ -3,6 +3,7 @@ from tqdm import tqdm
 import torch
 import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
+from metrics import compute_metrics, print_metrics
 
 def train_loop(train_loader, net, criterion, optimizer, device):
     net.train()
@@ -27,6 +28,14 @@ def validation_loop(val_loader, net, criterion, device, threshold=0.5):
             images, labels = images.to(device), labels.to(device)
             outputs = net(images)
             total_loss += criterion(outputs, labels).item() * images.size(0)
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+
+            batch_metrics = compute_metrics(outputs, labels, threshold=0.5)
+            print_metrics(batch_metrics, prefix="Val")
+
     return total_loss / len(val_loader.dataset)
 
 def predict_test(test_loader, net, device, threshold=0.5):
