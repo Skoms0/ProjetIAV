@@ -1,5 +1,6 @@
 # import statements for python, torch and companion libraries and your own modules
 import torch
+import torch.nn as nn
 import os
 from glob import glob
 from pathlib import Path
@@ -12,6 +13,45 @@ from utils2 import update_graphs
 
 # global variables defining training hyper-parameters among other things, data directories initialization
 from config import CONFIG
+
+# Import model weights
+from torchvision.models import (
+    convnext_tiny, ConvNeXt_Tiny_Weights,
+    resnet50, ResNet50_Weights,
+    efficientnet_b0, EfficientNet_B0_Weights
+)
+
+def get_model(config, device):
+    """
+    Returns a model instance based on config["model"] and config["pretrained"],
+    with the final classifier adapted for 80 multi-label outputs (MS COCO).
+    """
+    model_name = config["model"].lower()
+    pretrained = config.get("pretrained", True)
+    
+    if model_name == "convnext_tiny":
+        weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
+        model = convnext_tiny(weights=weights)
+        # Replace classifier for 80 classes
+        model.classifier[2] = nn.Linear(model.classifier[2].in_features, 80)
+    
+    elif model_name == "resnet50":
+        weights = ResNet50_Weights.DEFAULT if pretrained else None
+        model = resnet50(weights=weights)
+        model.fc = nn.Linear(model.fc.in_features, 80)  # replace final FC layer
+    
+    elif model_name == "efficientnet_b0":
+        weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
+        model = efficientnet_b0(weights=weights)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, 80)
+    
+    else:
+        raise ValueError(f"Unsupported model: {config['model']}")
+    
+    # Move model to device (CPU or GPU)
+    model = model.to(device)
+    
+    return model
 
 # device initialization
 
@@ -34,24 +74,115 @@ print("Using device:", device)
 # instantiation of transforms, datasets and data loaders
 # TIP : use torch.utils.data.random_split to split the training set into train and validation subsets
 
-# class definitions
+## Transforms
+from torchvision.models import ConvNeXt_Tiny_Weights
+from torchvision import transforms
+from torch.utils.data import DataLoader, random_split
+
+weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1
+
+### Training transform: include optional augmentation
+train_transform = transforms.Compose([
+    transforms.RandomHorizontalFlip(),  # simple augmentation for training
+    weights.transforms()                # official resize + center crop + normalize
+])
+
+### Validation / Test transform: deterministic
+val_transform = weights.transforms()
+
+## Datasets
+full_train_dataset = COCOTrainImageDataset(
+    img_dir=CONFIG["train_dir"],
+    annotations_dir=CONFIG["label_dir"],
+    transform=train_transform
+)
+
+image, label = full_train_dataset[0]
+print(type(image))  # <class 'torch.Tensor'>
+print(type(label))  # <class 'torch.Tensor'>
+print(image.shape)  # e.g., torch.Size([3, 224, 224])
+print(label.shape)  # torch.Size([80]) for multi-label
+
+test_dataset = COCOTestImageDataset(
+    img_dir=CONFIG["test_dir"],
+    transform=val_transform
+)
+
+
+## Train/Validation Split
+val_size = int(CONFIG["val_split"] * len(full_train_dataset))  # 20% validation
+train_size = len(full_train_dataset) - val_size
+
+train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
+
+## DataLoaders
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=CONFIG["batch_size"],
+    shuffle=True,
+    num_workers=CONFIG["max_cpus"]
+)
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=CONFIG["batch_size"],
+    shuffle=False,
+    num_workers=CONFIG["max_cpus"]
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=CONFIG["batch_size"],
+    shuffle=False,
+    num_workers=CONFIG["max_cpus"]
+)
+
+print("DataLoaders ready: train={}, val={}, test={}".format(
+    len(train_loader), len(val_loader), len(test_loader)
+))
+
 
 # instantiation and preparation of network model
+model = get_model(CONFIG, device)
+print(model)
+
 
 # instantiation of loss criterion
+criterion = torch.nn.BCEWithLogitsLoss()
+
 # instantiation of optimizer, registration of network parameters
+if CONFIG["optimizer"].lower() == "adam":
+    optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
+elif CONFIG["optimizer"].lower() == "sgd":
+    optimizer = torch.optim.SGD(model.parameters(), lr=CONFIG["learning_rate"], momentum=0.9)
+else:
+    raise ValueError(f"Unsupported optimizer: {CONFIG['optimizer']}")
+
+# Tensorboard
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter(log_dir="runs/experiment1")
 
 # definition of current best model path
-# initialization of model selection metric
+best_f1 = 0.0
+best_model_path = "best_model.pth"
 
-# creation of tensorboard SummaryWriter (optional)
-
-# epochs loop:
-#   train
-#   validate on train set
-#   validate on validation set
-#   update graphs (optional)
-#   is new model better than current model ?
-#       save it, update current best metric
+# main training loop
+for epoch in range(CONFIG["num_epochs"]):
+    ## Train
+    train_loss = train_loop(train_loader, model, criterion, optimizer, device)
+    
+    ## Validate
+    train_results = validation_loop(train_loader, model, criterion, num_classes=80, device=device, multi_task=True)
+    val_results = validation_loop(val_loader, model, criterion, num_classes=80, device=device, multi_task=True)
+    
+    ## Update graphs (optional)
+    update_graphs(writer, epoch, train_results, val_results)
+    
+    ## Save model if better
+    if val_results["f1"] > best_f1:
+        best_f1 = val_results["f1"]
+        torch.save(model.state_dict(), best_model_path)
+        print(f"New best model saved with F1={best_f1:.4f}")
 
 # close tensorboard SummaryWriter if created (optional)
+writer.close()

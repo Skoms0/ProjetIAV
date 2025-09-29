@@ -1,14 +1,18 @@
+from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
+
 CONFIG = {
     "model": "convnext_tiny",
     "pretrained": True,
     "batch_size": 32,
     "image_size": 224,
-    "num_epochs": 10,
+    "num_epochs": 1,
     "learning_rate": 0.001,
     "optimizer": "adam",
     "threshold": 0.5,
     "max_cpus": 4,
     "train_dir": "ms-coco/images/train",
     "label_dir": "ms-coco/images/label",
-    "test_dir": "ms-coco/images/test"
+    "test_dir": "ms-coco/images/test",
+    "validation_split": 0.2,
+    "threshold": 0.5,
 }
