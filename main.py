@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, random_split
 import torchvision.transforms as transforms
 import os
 import json
+import numpy as np
 
 from dataset import COCOTrainImageDataset, COCOTestImageDataset
 from model import EfficientNetMultiLabel
@@ -91,23 +92,44 @@ criterion = nn.BCEWithLogitsLoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
 
 # -----------------------------
-# Training
+# Training with automatic threshold tuning
 # -----------------------------
+best_micro_f1 = 0.0
+best_threshold = params["threshold"]
+
 for epoch in range(params["num_epochs"]):
     print(f"\nEpoch {epoch+1}/{params['num_epochs']}")
     train_loop(train_loader, model, criterion, optimizer, device)
-    val_loss = validation_loop(val_loader, model, criterion, device)
-    print(f"Validation loss: {val_loss:.4f}")
+
+    # Validate at multiple thresholds to find the best
+    thresholds = np.arange(0.3, 0.71, 0.05)
+    best_epoch_f1 = 0.0
+    best_epoch_threshold = 0.5
+    for t in thresholds:
+        val_loss, micro_f1, macro_f1, per_class_f1 = validation_loop(val_loader, model, criterion, device, threshold=t)
+        print(f"Threshold {t:.2f} | Micro F1: {micro_f1:.4f} | Macro F1: {macro_f1:.4f}")
+        if micro_f1 > best_epoch_f1:
+            best_epoch_f1 = micro_f1
+            best_epoch_threshold = t
+
+    print(f"Best threshold this epoch: {best_epoch_threshold:.2f} | Best micro F1: {best_epoch_f1:.4f}")
+    if best_epoch_f1 > best_micro_f1:
+        best_micro_f1 = best_epoch_f1
+        best_threshold = best_epoch_threshold
+        # Optionally save best model
+        torch.save(model.state_dict(), "best_model.pth")
+
+print(f"\nTraining completed. Best threshold: {best_threshold:.2f} | Best micro F1: {best_micro_f1:.4f}")
 
 # -----------------------------
-# Save model weights
+# Save final model weights
 # -----------------------------
 save_model_weights_json(model)
 
 # -----------------------------
 # Test predictions
 # -----------------------------
-results = predict_test(test_loader, model, device)
+results = predict_test(test_loader, model, device, threshold=best_threshold)
 with open("test_predictions.json", "w") as f:
     json.dump(results, f, indent=4)
 print("Predictions saved in test_predictions.json")
@@ -115,5 +137,5 @@ print("Predictions saved in test_predictions.json")
 # -----------------------------
 # Visualize predictions
 # -----------------------------
-visualize_predictions(test_loader, model, device, classes, threshold=params["threshold"],
+visualize_predictions(test_loader, model, device, classes, threshold=best_threshold,
                       n_images=params["n_images_visualize"])

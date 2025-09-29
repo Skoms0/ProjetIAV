@@ -3,12 +3,14 @@ from tqdm import tqdm
 import torch
 import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
-from metrics import compute_metrics, print_metrics
+from sklearn.metrics import f1_score
+import numpy as np
 
 def train_loop(train_loader, net, criterion, optimizer, device):
     net.train()
     loop = tqdm(train_loader, desc="Training", ncols=100)
     running_loss = 0.0
+    
     for i, (images, labels) in enumerate(loop):
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
@@ -16,28 +18,57 @@ def train_loop(train_loader, net, criterion, optimizer, device):
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
+        
         running_loss += loss.item()
         loop.set_postfix(loss=running_loss/(i+1))
+
 
 def validation_loop(val_loader, net, criterion, device, threshold=0.5):
     net.eval()
     total_loss = 0
+    all_outputs = []
+    all_labels = []
+
     with torch.no_grad():
         loop = tqdm(val_loader, desc="Validation", ncols=100)
         for images, labels in loop:
             images, labels = images.to(device), labels.to(device)
             outputs = net(images)
-            total_loss += criterion(outputs, labels).item() * images.size(0)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item() * images.size(0)
 
-    # Compute metrics for the whole validation set
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = net(images)   # <-- corrected here
-            batch_metrics = compute_metrics(outputs, labels, threshold=threshold)
-            print_metrics(batch_metrics, prefix="Val")
+            all_outputs.append(outputs)
+            all_labels.append(labels)
+    
+    all_outputs = torch.cat(all_outputs, dim=0)
+    all_labels = torch.cat(all_labels, dim=0)
 
-    return total_loss / len(val_loader.dataset)
+    probs = torch.sigmoid(all_outputs).cpu().numpy()
+    labels_np = all_labels.cpu().numpy()
+
+    # Per-class F1 for threshold tuning
+    thresholds = np.arange(0.3, 0.71, 0.05)
+    best_threshold = threshold
+    best_micro_f1 = 0
+    for t in thresholds:
+        preds = (probs > t).astype(int)
+        micro_f1 = f1_score(labels_np, preds, average="micro", zero_division=0)
+        if micro_f1 > best_micro_f1:
+            best_micro_f1 = micro_f1
+            best_threshold = t
+
+    # Compute final metrics with best threshold
+    preds = (probs > best_threshold).astype(int)
+    micro_f1 = f1_score(labels_np, preds, average="micro", zero_division=0)
+    macro_f1 = f1_score(labels_np, preds, average="macro", zero_division=0)
+    per_class_f1 = f1_score(labels_np, preds, average=None, zero_division=0)
+
+    print(f"\nValidation Loss: {total_loss/len(val_loader.dataset):.4f}")
+    print(f"Best threshold: {best_threshold:.2f}")
+    print(f"Micro F1: {micro_f1:.4f} | Macro F1: {macro_f1:.4f}")
+    print("Per-class F1:", per_class_f1)
+
+    return total_loss / len(val_loader.dataset), micro_f1, macro_f1, per_class_f1, best_threshold
 
 
 def predict_test(test_loader, net, device, threshold=0.5):
@@ -55,11 +86,13 @@ def predict_test(test_loader, net, device, threshold=0.5):
                 results[stem] = classes
     return results
 
+
 def save_model_weights_json(model, filename="model_weights.json"):
     weights_dict = {name: param.cpu().numpy().tolist() for name, param in model.state_dict().items()}
     with open(filename, "w") as f:
         json.dump(weights_dict, f)
     print(f"Model weights saved to {filename}")
+
 
 def visualize_predictions(test_loader, net, device, classes, threshold=0.5, n_images=5):
     net.eval()

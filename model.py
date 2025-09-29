@@ -11,16 +11,16 @@ class EfficientNetMultiLabel(nn.Module):
             weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1
         )
 
-        # Freeze backbone if required
+        # Freeze backbone if requested
         if freeze_backbone:
             for param in self.backbone.parameters():
                 param.requires_grad = False
 
-        # Replace classifier with identity
+        # Replace original classifier with identity
         in_features = self.backbone.classifier[1].in_features
         self.backbone.classifier = nn.Identity()
 
-        # New multilabel head
+        # New multi-label classifier head
         self.head = nn.Linear(in_features, num_classes)
 
     def forward(self, x):
