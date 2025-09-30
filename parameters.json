@@ -1,7 +1,7 @@
 {
   "device": "cuda",
   "train_image_dir": "ms-coco/images/train-resized",
-  "train_label_dir": "ms-coco/labels/train/train",
+  "train_label_dir": "ms-coco/labels/train",
   "test_image_dir": "ms-coco/images/test-resized",
   "batch_size": 24,
   "num_epochs": 25,
