@@ -208,3 +208,5 @@ __marimo__/
 
 ms-coco/
 *.jpg
+
+best_model.pth

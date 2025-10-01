@@ -1,12 +1,13 @@
 import torch
-
+from tqdm import tqdm
 
 def train_loop(train_loader, net, criterion, optimizer, device,
                mbatch_loss_group=-1):
     net.train()
     running_loss = 0.0
     mbatch_losses = []
-    for i, data in enumerate(train_loader):
+
+    for i, data in enumerate(tqdm(train_loader, desc="Training", leave=True)):
         inputs, labels = data[0].to(device), data[1].to(device)
         optimizer.zero_grad()
         outputs = net(inputs)
@@ -20,10 +21,12 @@ def train_loop(train_loader, net, criterion, optimizer, device,
             running_loss = 0.0
     if mbatch_loss_group > 0:
         return mbatch_losses
+    else:
+        return running_loss / len(train_loader)  # add average loss return
 
 
 def validation_loop(val_loader, net, criterion, num_classes, device,
-                    multi_task=False, th_multi_task=0.5, one_hot=False, class_metrics=False):
+                    multi_task=False, th_multi_task=0.5, one_hot=True, class_metrics=False):
     net.eval()
     loss = 0
     correct = 0
@@ -32,7 +35,7 @@ def validation_loop(val_loader, net, criterion, num_classes, device,
     class_tp = {label:0 for label in range(num_classes)}
     class_fp = {label:0 for label in range(num_classes)}
     with torch.no_grad():
-        for data in val_loader:
+        for data in tqdm(val_loader, desc="Validating", leave=True):
             images, labels = data[0].to(device), data[1].to(device)
             outputs = net(images)
             loss += criterion(outputs, labels).item() * images.size(0)
@@ -42,9 +45,7 @@ def validation_loop(val_loader, net, criterion, num_classes, device,
             else:
                 predictions = torch.where(outputs > th_multi_task, 1.0, 0.0)
             if not one_hot:
-                labels_mat = torch.zeros_like(outputs)
-                labels_mat[torch.arange(outputs.shape[0]), labels] = 1.0
-                labels = labels_mat
+                pass
                 
             tps = predictions * labels
             fps = predictions - tps
