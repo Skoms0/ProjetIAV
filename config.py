@@ -2,7 +2,7 @@ from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
 import os
 
 CONFIG = {
-    "model": "mobilenet_v3_small", # mobilenet_v3_small, efficientnet_b0, resnet50
+    "model": "resnet18", # mobilenet_v3_small, efficientnet_b0, resnet50
     "pretrained": True,
     "batch_size": 64,
     "image_size": 256,
@@ -12,9 +12,9 @@ CONFIG = {
     "weight_decay": 1e-4,
     "threshold": 0.5,
     "max_cpus": 14,
-    "train_dir": "ms-coco/images/train-resized/train-resized",
+    "train_dir": "ms-coco/images/train-resized",
     "label_dir": "ms-coco/labels/train/train",
-    "test_dir": "ms-coco/images/test-resized/test-resized",
+    "test_dir": "ms-coco/images/test-resized",
     "validation_split": 0.2,
     "threshold": 0.5,
 }
