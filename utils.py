@@ -1,72 +1,59 @@
-import json
-from tqdm import tqdm
-import torch
-import matplotlib.pyplot as plt
-import torchvision.transforms as transforms
+def update_graphs(summary_writer, epoch, train_results, test_results,
+                  train_class_results=None, test_class_results=None, 
+                  class_names = 80, mbatch_group=-1, mbatch_count=0, mbatch_losses=None):
+    if mbatch_group > 0:
+        for i in range(len(mbatch_losses)):
+            summary_writer.add_scalar("Losses/Train mini-batches",
+                                  mbatch_losses[i],
+                                  epoch * mbatch_count + (i+1)*mbatch_group)
 
-def train_loop(train_loader, net, criterion, optimizer, device):
-    net.train()
-    loop = tqdm(train_loader, desc="Training", ncols=100)
-    running_loss = 0.0
-    for i, (images, labels) in enumerate(loop):
-        images, labels = images.to(device), labels.to(device)
-        optimizer.zero_grad()
-        outputs = net(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item()
-        loop.set_postfix(loss=running_loss/(i+1))
+    summary_writer.add_scalars("Losses/Train Loss vs Test Loss",
+                               {"Train Loss" : train_results["loss"],
+                                "Test Loss" : test_results["loss"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
 
-def validation_loop(val_loader, net, criterion, device, threshold=0.5):
-    net.eval()
-    total_loss = 0
-    with torch.no_grad():
-        loop = tqdm(val_loader, desc="Validation", ncols=100)
-        for images, labels in loop:
-            images, labels = images.to(device), labels.to(device)
-            outputs = net(images)
-            total_loss += criterion(outputs, labels).item() * images.size(0)
-    return total_loss / len(val_loader.dataset)
+    summary_writer.add_scalars("Metrics/Train Accuracy vs Test Accuracy",
+                               {"Train Accuracy" : train_results["accuracy"],
+                                "Test Accuracy" : test_results["accuracy"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
 
-def predict_test(test_loader, net, device, threshold=0.5):
-    net.eval()
-    results = {}
-    with torch.no_grad():
-        loop = tqdm(test_loader, desc="Testing", ncols=100)
-        for images, stems in loop:
-            images = images.to(device)
-            outputs = net(images)
-            probs = torch.sigmoid(outputs)
-            preds = (probs > threshold).cpu().numpy()
-            for stem, pred in zip(stems, preds):
-                classes = [int(i) for i, v in enumerate(pred) if v]
-                results[stem] = classes
-    return results
+    summary_writer.add_scalars("Metrics/Train F1 vs Test F1",
+                               {"Train F1" : train_results["f1"],
+                                "Test F1" : test_results["f1"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
 
-def save_model_weights_json(model, filename="model_weights.json"):
-    weights_dict = {name: param.cpu().numpy().tolist() for name, param in model.state_dict().items()}
-    with open(filename, "w") as f:
-        json.dump(weights_dict, f)
-    print(f"Model weights saved to {filename}")
+    summary_writer.add_scalars("Metrics/Train Precision vs Test Precision",
+                               {"Train Precision" : train_results["precision"],
+                                "Test Precision" : test_results["precision"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
 
-def visualize_predictions(test_loader, net, device, classes, threshold=0.5, n_images=5):
-    net.eval()
-    images_shown = 0
-    with torch.no_grad():
-        for images, stems in test_loader:
-            images = images.to(device)
-            outputs = net(images)
-            probs = torch.sigmoid(outputs)
-            preds = (probs > threshold).cpu().numpy()
-            for img_tensor, pred, stem in zip(images.cpu(), preds, stems):
-                img = transforms.ToPILImage()(img_tensor)
-                plt.figure(figsize=(4,4))
-                plt.imshow(img)
-                class_names = [classes[i] for i, v in enumerate(pred) if v]
-                plt.title(f"{stem}: {class_names}")
-                plt.axis('off')
-                plt.show()
-                images_shown += 1
-                if images_shown >= n_images:
-                    return
+    summary_writer.add_scalars("Metrics/Train Recall vs Test Recall",
+                               {"Train Recall" : train_results["recall"],
+                                "Test Recall" : test_results["recall"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
+
+    if train_class_results and test_class_results:
+        for i in range(len(train_class_results)):
+            summary_writer.add_scalars(f"Class Metrics/{class_names[i]}/Train F1 vs Test F1",
+                                       {"Train F1" : train_class_results[i]["f1"],
+                                        "Test F1" : test_class_results[i]["f1"]},
+                                       (epoch + 1) if not mbatch_group > 0
+                                             else (epoch + 1) * mbatch_count)
+
+            summary_writer.add_scalars(f"Class Metrics/{class_names[i]}/Train Precision vs Test Precision",
+                                       {"Train Precision" : train_class_results[i]["precision"],
+                                        "Test Precision" : test_class_results[i]["precision"]},
+                                       (epoch + 1) if not mbatch_group > 0
+                                             else (epoch + 1) * mbatch_count)
+
+            summary_writer.add_scalars(f"Class Metrics/{class_names[i]}/Train Recall vs Test Recall",
+                                       {"Train Recall" : train_class_results[i]["recall"],
+                                        "Test Recall" : test_class_results[i]["recall"]},
+                                       (epoch + 1) if not mbatch_group > 0
+                                             else (epoch + 1) * mbatch_count)
+    summary_writer.flush()

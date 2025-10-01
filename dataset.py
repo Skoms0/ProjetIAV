@@ -1,43 +1,47 @@
 import os
-from pathlib import Path
 from glob import glob
+from pathlib import Path
+
 from PIL import Image
 import torch
-from torch.utils.data import Dataset
 
-class COCOTrainImageDataset(Dataset):
-    def __init__(self, img_dir, labels_dir, transform=None):
-        self.img_list = sorted(glob(os.path.join(img_dir, "*.jpg")))
-        label_dict = {Path(f).stem: f for f in glob(os.path.join(labels_dir, "*.cls"))}
-        self.img_list = [img for img in self.img_list if Path(img).stem in label_dict]
-        self.label_list = [label_dict[Path(img).stem] for img in self.img_list]
+
+class COCOTrainImageDataset(torch.utils.data.Dataset):
+    def __init__(self, img_dir, annotations_dir, max_images=None, transform=None):
+        self.img_labels = sorted(glob("*.cls", root_dir=annotations_dir))
+        if max_images:
+            self.img_labels = self.img_labels[:max_images]
+        self.img_dir = img_dir
+        self.annotations_dir = annotations_dir
         self.transform = transform
 
     def __len__(self):
-        return len(self.img_list)
+        return len(self.img_labels)
 
     def __getitem__(self, idx):
-        img_path = self.img_list[idx]
-        labels_path = self.label_list[idx]
+        img_path = os.path.join(self.img_dir, Path(self.img_labels[idx]).stem + ".jpg")
+        labels_path = os.path.join(self.annotations_dir, self.img_labels[idx])
         image = Image.open(img_path).convert("RGB")
+        with open(labels_path) as f: 
+            labels = [int(label) for label in f.readlines()]
         if self.transform:
             image = self.transform(image)
-        with open(labels_path) as f:
-            labels = [int(x) for x in f.read().splitlines()]
-        labels_tensor = torch.zeros(80).scatter_(0, torch.tensor(labels), value=1)
-        return image, labels_tensor
+        labels = torch.zeros(80).scatter_(0, torch.tensor(labels), value=1)
+        return image, labels
 
-class COCOTestImageDataset(Dataset):
+
+class COCOTestImageDataset(torch.utils.data.Dataset):
     def __init__(self, img_dir, transform=None):
-        self.img_list = sorted(glob(os.path.join(img_dir, "*.jpg")))
+        self.img_list = sorted(glob("*.jpg", root_dir=img_dir))    
+        self.img_dir = img_dir
         self.transform = transform
 
     def __len__(self):
         return len(self.img_list)
 
     def __getitem__(self, idx):
-        img_path = self.img_list[idx]
-        image = Image.open(img_path).convert("RGB")
+        img_path = os.path.join(self.img_dir, self.img_list[idx])
+        image = Image.open(img_path).convert("RGB")        
         if self.transform:
             image = self.transform(image)
-        return image, Path(img_path).stem
+        return image, Path(img_path).stem # filename w/o extension
