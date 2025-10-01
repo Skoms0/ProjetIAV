@@ -17,25 +17,36 @@ from config import CONFIG
 
 # Import model weights
 from torchvision.models import (
-    convnext_tiny, ConvNeXt_Tiny_Weights,
-    resnet50, ResNet50_Weights,
-    efficientnet_b0, EfficientNet_B0_Weights
+    mobilenet_v3_small, MobileNet_V3_Small_Weights,
+    efficientnet_b0, EfficientNet_B0_Weights,
+    resnet50, ResNet50_Weights
 )
 
-def get_preprocessing_transform(model_name, train=True):
+def get_preprocessing_transform(model_name, train=True, pretrained=True):
     model_name = model_name.lower()
-    if model_name == "convnext_tiny":
-        weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1
-    elif model_name == "resnet50":
-        weights = ResNet50_Weights.DEFAULT
+
+    if model_name == "mobilenet_v3_small":
+        weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
     elif model_name == "efficientnet_b0":
-        weights = EfficientNet_B0_Weights.IMAGENET1K_V1
+        weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
+    elif model_name == "resnet50":
+        weights = ResNet50_Weights.DEFAULT if pretrained else None
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
-    base_transform = weights.transforms()
+    # Base transforms from pretrained weights (resize, crop, normalize, etc.)
+    base_transform = weights.transforms() if weights is not None else transforms.Compose([
+        transforms.Resize((224, 224)),  # fallback
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])
+    ])
+
     if train:
-        return transforms.Compose([transforms.RandomHorizontalFlip(), base_transform])
+        return transforms.Compose([
+            transforms.RandomHorizontalFlip(),  # simple augmentation
+            base_transform
+        ])
     else:
         return base_transform
 
@@ -48,29 +59,26 @@ def get_model(config, device):
     model_name = config["model"].lower()
     pretrained = config.get("pretrained", True)
     
-    if model_name == "convnext_tiny":
-        weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
-        model = convnext_tiny(weights=weights)
-        # Replace classifier for 80 classes
-        model.classifier[2] = nn.Linear(model.classifier[2].in_features, 80)
-    
-    elif model_name == "resnet50":
-        weights = ResNet50_Weights.DEFAULT if pretrained else None
-        model = resnet50(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, 80)  # replace final FC layer
-    
+    if model_name == "mobilenet_v3_small":
+        weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
+        model = mobilenet_v3_small(weights=weights)
+        model.classifier[3] = nn.Linear(model.classifier[3].in_features, 80)
+
     elif model_name == "efficientnet_b0":
         weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
         model = efficientnet_b0(weights=weights)
         model.classifier[1] = nn.Linear(model.classifier[1].in_features, 80)
+
+    elif model_name == "resnet50":
+        weights = ResNet50_Weights.DEFAULT if pretrained else None
+        model = resnet50(weights=weights)
+        model.fc = nn.Linear(model.fc.in_features, 80)
     
     else:
         raise ValueError(f"Unsupported model: {config['model']}")
     
     # Move model to device (CPU or GPU)
-    model = model.to(device)
-    
-    return model
+    return model.to(device)
 
 def main():
     # device initialization
@@ -179,6 +187,7 @@ def main():
 
     # main training loop
     for epoch in range(CONFIG["num_epochs"]):
+        print(f"\nEpoch {epoch+1}/{CONFIG['num_epochs']}")
         ## Train
         train_loss = train_loop(train_loader, model, criterion, optimizer, device)
         
