@@ -8,9 +8,9 @@ from pathlib import Path
 from PIL import Image
 
 # import Jupyter variables 
-from dataset2 import COCOTrainImageDataset, COCOTestImageDataset
-from loops2 import train_loop, validation_loop
-from utils2 import update_graphs
+from dataset import COCOTrainImageDataset, COCOTestImageDataset
+from loops import train_loop, validation_loop
+from utils import update_graphs
 
 # global variables defining training hyper-parameters among other things, data directories initialization
 from config import CONFIG
