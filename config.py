@@ -2,7 +2,7 @@ from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
 import os
 
 CONFIG = {
-    "model": "mobilenet_v3_small",
+    "model": "mobilenet_v3_small", # mobilenet_v3_small, efficientnet_b0, resnet50
     "pretrained": True,
     "batch_size": 64,
     "image_size": 256,
