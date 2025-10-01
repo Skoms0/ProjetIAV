@@ -4,9 +4,9 @@ import os
 CONFIG = {
     "model": "mobilenet_v3_small",
     "pretrained": True,
-    "batch_size": 32,
+    "batch_size": 64,
     "image_size": 224,
-    "num_epochs": 5,
+    "num_epochs": 15,
     "learning_rate": 0.001,
     "optimizer": "adam",
     "threshold": 0.5,

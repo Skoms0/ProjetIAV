@@ -178,8 +178,13 @@ def main():
         raise ValueError(f"Unsupported optimizer: {CONFIG['optimizer']}")
 
     # Tensorboard
+    from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
-    writer = SummaryWriter(log_dir="runs/experiment1")
+
+    run_name = f"{CONFIG['model']}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    writer = SummaryWriter(log_dir=os.path.join("runs", run_name))
+    print(f"TensorBoard logs → runs/{run_name}")
+
 
     # definition of current best model path
     best_f1 = 0.0
