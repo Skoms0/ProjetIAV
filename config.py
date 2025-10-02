@@ -6,10 +6,10 @@ CONFIG = {
     "pretrained": True,
     "batch_size": 64,
     "image_size": 256,
-    "num_epochs": 10,
-    "learning_rate": 1e-4,
+    "num_epochs": 20,
+    "learning_rate": 3e-4,
     "optimizer": "adamw",  # adam, adamw, sgd
-    "weight_decay": 1e-4,
+    "weight_decay": 1e-3,
     "threshold": 0.5,
     "max_cpus": 14,
     "train_dir": "ms-coco/images/train-resized/train-resized",

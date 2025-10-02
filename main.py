@@ -34,21 +34,32 @@ def get_preprocessing_transform(model_name, train=True, pretrained=True):
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
-    # Base transforms from pretrained weights (resize, crop, normalize, etc.)
-    base_transform = weights.transforms() if weights is not None else transforms.Compose([
-        transforms.Resize((224, 224)),  # fallback
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    ])
+        # If we have pretrained weights, we’ll use their normalization stats
+    # but override the resize/crop to allow custom augmentation
+    if weights is not None:
+        norm_mean = weights.transforms().mean
+        norm_std = weights.transforms().std
+    else:
+        norm_mean = [0.485, 0.456, 0.406]
+        norm_std = [0.229, 0.224, 0.225]
 
     if train:
+        # ✅ Stronger augmentation for better generalization
         return transforms.Compose([
-            transforms.RandomHorizontalFlip(),  # simple augmentation
-            base_transform
+            transforms.RandomResizedCrop(CONFIG["image_size"], scale=(0.8, 1.0)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomRotation(degrees=15),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=norm_mean, std=norm_std)
         ])
     else:
-        return base_transform
+        # ✅ Deterministic for validation/test
+        return transforms.Compose([
+            transforms.Resize((CONFIG["image_size"], CONFIG["image_size"])),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=norm_mean, std=norm_std)
+        ])
 
 
 def get_model(config, device):
@@ -62,7 +73,11 @@ def get_model(config, device):
     if model_name == "mobilenet_v3_small":
         weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
         model = mobilenet_v3_small(weights=weights)
-        model.classifier[3] = nn.Linear(model.classifier[3].in_features, 80)
+        in_features = model.classifier[3].in_features
+        model.classifier[3] = nn.Sequential(
+            nn.Dropout(p=0.3),              # <-- you can tune p (0.2–0.4)
+            nn.Linear(in_features, 80)
+        )
 
     elif model_name == "efficientnet_b0":
         weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None

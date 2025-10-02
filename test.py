@@ -1,76 +1,45 @@
-# import statements for python, torch and companion libraries and your own modules
-# TIP: use the python standard json module to write python dictionaries as JSON files
+# =======================
+#  test.py — Inference
+# =======================
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from torchvision.models import ConvNeXt_Tiny_Weights
-
 import json
-import os
+import time
 from pathlib import Path
 
-## Your custom dataset class
-from dataset2 import COCOTestImageDataset
-
-## Your model helper function
-from main import get_model  # assuming get_model is in main.py
-
-# global variables defining inference hyper-parameters among other things 
-# DON'T forget the multi-task classification probability threshold
+from dataset import COCOTestImageDataset   # <- make sure you use your correct dataset file
+from main import get_model                 # we reuse your get_model() to build the network
 from config import CONFIG
 
-# data, trained model and output directories/filenames initialization
-model_path = "best_model.pth"
-output_json = "test_predictions.json"
-
-# device initialization
-## Check if GPU is available
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    print("GPU detected. Using CUDA for training.")
-else:
-    print("No GPU detected. Testing on CPU will be significantly slower. Please be sure of the model you are using before continuing.")
-    choice = input("Do you want to continue using CPU? (y/n): ").strip().lower()
-    if choice == "y":
-        device = torch.device("cpu")
-        print("Continuing on CPU...")
-    else:
-        print("Exiting program. Please use a machine with GPU.")
-        exit()  # stops the program
-
-print("Using device:", device)
-
-# instantiation of transforms, dataset and data loader
-## Import weights for all supported models
 from torchvision.models import (
-    ConvNeXt_Tiny_Weights,
-    ResNet50_Weights,
-    EfficientNet_B0_Weights
+    mobilenet_v3_small, MobileNet_V3_Small_Weights,
+    efficientnet_b0, EfficientNet_B0_Weights,
+    resnet50, ResNet50_Weights
 )
-from torchvision import transforms
+
 
 def get_test_transform(config):
     """
-    Returns the deterministic test/validation transform according to 
-    config['model'] and config['pretrained'].
+    Returns the deterministic test transform for the selected model.
+    Uses the same preprocessing as the original pretrained weights.
     """
     model_name = config["model"].lower()
     pretrained = config.get("pretrained", True)
 
-    if model_name == "convnext_tiny":
-        weights = ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
-    elif model_name == "resnet50":
-        weights = ResNet50_Weights.DEFAULT if pretrained else None
+    if model_name == "mobilenet_v3_small":
+        weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
     elif model_name == "efficientnet_b0":
         weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
+    elif model_name == "resnet50":
+        weights = ResNet50_Weights.DEFAULT if pretrained else None
     else:
         raise ValueError(f"Unsupported model: {config['model']}")
 
     if weights is not None:
         return weights.transforms()
     else:
-        # fallback: basic deterministic transforms
         return transforms.Compose([
             transforms.Resize((config["image_size"], config["image_size"])),
             transforms.ToTensor(),
@@ -78,43 +47,61 @@ def get_test_transform(config):
                                  std=[0.229, 0.224, 0.225])
         ])
 
-test_transform = get_test_transform(CONFIG)
 
-test_dataset = COCOTestImageDataset(
-    img_dir=CONFIG["test_dir"],
-    transform=test_transform
-)
+def main():
+    # ----- Device -----
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("GPU detected. Using CUDA for inference.")
+    else:
+        device = torch.device("cpu")
+        print("No GPU detected. Using CPU.")
 
-test_loader = DataLoader(
-    test_dataset,
-    batch_size=CONFIG["batch_size"],
-    shuffle=False,
-    num_workers=CONFIG["max_cpus"]
-)
+    # ----- Dataset & DataLoader -----
+    test_transform = get_test_transform(CONFIG)
+    test_dataset = COCOTestImageDataset(
+        img_dir=CONFIG["test_dir"],
+        transform=test_transform
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=CONFIG["batch_size"],
+        shuffle=False,
+        num_workers=CONFIG["max_cpus"]
+    )
 
-# load network model from saved file
-model = get_model(CONFIG, device)
-model.load_state_dict(torch.load(model_path, map_location=device))
-model.eval()  # important for inference
+    # ----- Load model -----
+    model = get_model(CONFIG, device)
+    model.load_state_dict(torch.load("best_model.pth", map_location=device))
+    model.eval()
+
+    print(f"Loaded model from best_model.pth — starting inference on {len(test_dataset)} images...")
+    start_time = time.time()
+
+    # ----- Prediction loop -----
+    predictions = {}
+    with torch.no_grad():
+        for images, image_ids in test_loader:
+            images = images.to(device)
+            outputs = model(images)
+            probs = torch.sigmoid(outputs)
+            preds = (probs >= CONFIG["threshold"]).cpu().numpy()
+
+            for img_id, pred in zip(image_ids, preds):
+                predictions[img_id] = pred.nonzero()[0].tolist()
+
+    # ----- Save results -----
+    output_json = "test_predictions.json"
+    with open(output_json, "w") as f:
+        json.dump(predictions, f, indent=4)
+
+    elapsed = time.time() - start_time
+    print(f"\n✅ Inference complete! Processed {len(test_dataset)} images "
+          f"in {elapsed/60:.2f} min ({elapsed:.1f} s total).")
+    print(f"Predictions saved to {output_json}")
 
 
-# initialize output dictionary
-predictions = {}  # keys: image filenames or IDs, values: list of predicted class indices
-
-
-# prediction loop over test_loader
-model.eval()
-with torch.no_grad():
-    for images, image_ids in test_loader:  # adjust if your dataset returns IDs
-        images = images.to(device)
-        outputs = model(images)
-        probs = torch.sigmoid(outputs)
-        preds = (probs >= CONFIG["threshold"]).cpu().numpy()
-        
-        for img_id, pred in zip(image_ids, preds):
-            predictions[img_id] = pred.nonzero()[0].tolist()  # indices of classes predicted
-
-
-# write JSON file
-with open(output_json, "w") as f:
-    json.dump(predictions, f, indent=4)
+if __name__ == "__main__":
+    from multiprocessing import freeze_support
+    freeze_support()
+    main()
