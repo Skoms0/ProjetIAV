@@ -5,7 +5,7 @@ CONFIG = {
     "model": "resnet18", # mobilenet_v3_small, efficientnet_b0, resnet50
     "pretrained": True,
     "batch_size": 64,
-    "image_size": 256,
+    "image_size": 224,
     "num_epochs": 10,
     "learning_rate": 1e-4,
     "optimizer": "adamw",  # adam, adamw, sgd
