@@ -66,32 +66,49 @@ def get_model(config, device):
     """
     model_name = config["model"].lower()
     pretrained = config.get("pretrained", True)
-    freeze_backbone = config.get("freeze_backbone", False)
+    dropout_p = config.get("dropout", 0.3)  # new param in config
 
     if model_name == "mobilenet_v3_small":
         weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
         model = mobilenet_v3_small(weights=weights)
-        model.classifier[3] = nn.Linear(model.classifier[3].in_features, 80)
+        in_features = model.classifier[3].in_features
+        model.classifier[3] = nn.Sequential(
+            nn.Dropout(p=dropout_p),
+            nn.Linear(in_features, 80)
+        )
 
     elif model_name == "efficientnet_b0":
         weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
         model = efficientnet_b0(weights=weights)
-        model.classifier[1] = nn.Linear(model.classifier[1].in_features, 80)
+        in_features = model.classifier[1].in_features
+        model.classifier[1] = nn.Sequential(
+            nn.Dropout(p=dropout_p),
+            nn.Linear(in_features, 80)
+        )
 
     elif model_name == "resnet50":
         weights = ResNet50_Weights.DEFAULT if pretrained else None
         model = resnet50(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, 80)
+        in_features = model.fc.in_features
+        model.fc = nn.Sequential(
+            nn.Dropout(p=dropout_p),
+            nn.Linear(in_features, 80)
+        )
 
     elif model_name == "resnet18":
         weights = ResNet18_Weights.DEFAULT if pretrained else None
         model = resnet18(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, 80)
+        in_features = model.fc.in_features
+        model.fc = nn.Sequential(
+            nn.Dropout(p=dropout_p),
+            nn.Linear(in_features, 80)
+        )
 
     else:
         raise ValueError(f"Unsupported model: {config['model']}")
 
     # Freeze backbone si demandé
+    freeze_backbone = config.get("freeze_backbone", False)
     if freeze_backbone:
         for param in model.parameters():
             param.requires_grad = False

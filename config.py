@@ -17,4 +17,5 @@ CONFIG = {
     "test_dir": "ms-coco/images/test-resized",
     "validation_split": 0.2,
     "threshold": 0.5,
+    "dropout":0.4,
 }
