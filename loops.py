@@ -92,3 +92,62 @@ def validation_loop(val_loader, net, criterion, num_classes, device,
         results = results, class_results
 
     return results
+
+import torch
+
+@torch.no_grad()
+def collect_val_probs_and_labels(val_loader, model, device):
+    """Collect raw sigmoid probabilities and labels from the validation set."""
+    model.eval()
+    all_probs = []
+    all_labels = []
+    for images, labels in val_loader:
+        images = images.to(device)
+        labels = labels.to(device)
+        logits = model(images)
+        probs = torch.sigmoid(logits)
+        all_probs.append(probs.cpu())
+        all_labels.append(labels.cpu())
+    return torch.cat(all_probs, dim=0), torch.cat(all_labels, dim=0)
+
+
+def f1_weighted_precision_recall(preds, labels):
+    preds = preds.float()
+    labels = labels.float()
+
+    tps = (preds * labels).sum(dim=0)
+    fps = (preds * (1 - labels)).sum(dim=0)
+    freqs = labels.sum(dim=0).clamp(min=1e-9)
+
+    class_prec = tps / (tps + fps + 1e-9)
+    class_recall = tps / freqs
+
+    class_weights = 1.0 / freqs
+    class_weights = class_weights / class_weights.sum()
+
+    prec = (class_prec * class_weights).sum().item()
+    rec = (class_recall * class_weights).sum().item()
+    f1 = 0.0 if (prec == 0.0 and rec == 0.0) else 2.0 / (1.0 / prec + 1.0 / rec)
+    return f1, prec, rec
+
+
+def sweep_thresholds(probs, labels, thresholds=None, prefer_precision=None):
+    """
+    Try several thresholds to find the one giving best F1.
+    If prefer_precision is set (e.g. 0.4), keep only thresholds with precision >= that.
+    """
+    if thresholds is None:
+        thresholds = [i / 100 for i in range(5, 96, 5)]  # 0.05 .. 0.95
+
+    results = []
+    for t in thresholds:
+        preds = (probs >= t).float()
+        f1, p, r = f1_weighted_precision_recall(preds, labels)
+        results.append((t, f1, p, r))
+
+    if prefer_precision is not None:
+        eligible = [x for x in results if x[2] >= prefer_precision]
+        if eligible:
+            return max(eligible, key=lambda x: x[1])  # best F1 among precision >= target
+
+    return max(results, key=lambda x: x[1])  # best F1 overall

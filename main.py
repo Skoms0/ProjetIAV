@@ -17,7 +17,7 @@ from config import CONFIG
 
 # Import model weights
 from torchvision.models import (
-    #mobilenet_v3_small, MobileNet_V3_Small_Weights,
+    mobilenet_v3_small, MobileNet_V3_Small_Weights,
     #efficientnet_b0, EfficientNet_B0_Weights,
     #resnet50, ResNet50_Weights,
     resnet18, ResNet18_Weights
@@ -233,8 +233,17 @@ def main():
             torch.save(model.state_dict(), best_model_path)
             print(f"New best model saved with F1={best_f1:.4f}")
 
+    # ----- 🔍 Sweep thresholds to find the best F1 on validation -----
+    print("\n🔎 Sweeping thresholds on validation set...")
+    val_probs, val_labels = collect_val_probs_and_labels(val_loader, model, device)
+    best_t, best_f1_sweep, best_prec, best_rec = sweep_thresholds(val_probs, val_labels)
+    print(f"✅ Best threshold = {best_t:.2f} | F1 = {best_f1_sweep:.4f} | "
+          f"Precision = {best_prec:.4f} | Recall = {best_rec:.4f}")
+
+    
     # close tensorboard SummaryWriter if created (optional)
     writer.close()
+
 
 if __name__ == "__main__":
     from multiprocessing import freeze_support
