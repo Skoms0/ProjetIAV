@@ -17,9 +17,10 @@ from config import CONFIG
 
 # Import model weights
 from torchvision.models import (
-    mobilenet_v3_small, MobileNet_V3_Small_Weights,
-    efficientnet_b0, EfficientNet_B0_Weights,
-    resnet50, ResNet50_Weights
+    #mobilenet_v3_small, MobileNet_V3_Small_Weights,
+    #efficientnet_b0, EfficientNet_B0_Weights,
+    #resnet50, ResNet50_Weights,
+    resnet18, ResNet18_Weights
 )
 
 def get_preprocessing_transform(model_name, train=True, pretrained=True):
@@ -31,6 +32,8 @@ def get_preprocessing_transform(model_name, train=True, pretrained=True):
         weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
     elif model_name == "resnet50":
         weights = ResNet50_Weights.DEFAULT if pretrained else None
+    elif model_name == "resnet18":
+        weights = ResNet18_Weights.DEFAULT if pretrained else None
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
@@ -87,6 +90,10 @@ def get_model(config, device):
     elif model_name == "resnet50":
         weights = ResNet50_Weights.DEFAULT if pretrained else None
         model = resnet50(weights=weights)
+        model.fc = nn.Linear(model.fc.in_features, 80)
+    elif model_name == "resnet18":
+        weights = ResNet18_Weights.DEFAULT if pretrained else None
+        model = resnet18(weights=weights)
         model.fc = nn.Linear(model.fc.in_features, 80)
     
     else:
