@@ -34,8 +34,26 @@ def get_preprocessing_transform(model_name, train=True, pretrained=True):
         weights = ResNet50_Weights.DEFAULT if pretrained else None
     elif model_name == "resnet18":
         weights = ResNet18_Weights.DEFAULT if pretrained else None
+        model = resnet18(weights=weights)
+        # Freeze backbone
+        for param in model.parameters():
+            param.requires_grad = False
+        # Replace final layer
+        model.fc = nn.Linear(model.fc.in_features, 80)
+
+    elif model_name == "resnet50":
+        weights = ResNet50_Weights.DEFAULT if pretrained else None
+        model = resnet50(weights=weights)
+        # Freeze backbone
+        for param in model.parameters():
+            param.requires_grad = False
+        # Replace final layer
+        model.fc = nn.Linear(model.fc.in_features, 80)
+
     else:
-        raise ValueError(f"Unsupported model: {model_name}")
+        raise ValueError(f"Unsupported model: {config['model']}")
+
+    return model.to(device)
 
     # Base transforms from pretrained weights (resize, crop, normalize, etc.)
     base_transform = weights.transforms() if weights is not None else transforms.Compose([
