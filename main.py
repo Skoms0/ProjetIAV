@@ -50,10 +50,6 @@ def get_preprocessing_transform(model_name, train=True, pretrained=True):
         # Replace final layer
         model.fc = nn.Linear(model.fc.in_features, 80)
 
-    else:
-        raise ValueError(f"Unsupported model: {config['model']}")
-
-    return model.to(device)
 
     # Base transforms from pretrained weights (resize, crop, normalize, etc.)
     base_transform = weights.transforms() if weights is not None else transforms.Compose([
