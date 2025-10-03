@@ -39,7 +39,6 @@ def get_preprocessing_transform(model_name, train=True, pretrained=True):
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
-    # Base transforms (resize, crop, normalize, etc.)
     base_transform = weights.transforms() if weights is not None else transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -60,13 +59,9 @@ def get_preprocessing_transform(model_name, train=True, pretrained=True):
 # Modèle
 # ============================
 def get_model(config, device):
-    """
-    Retourne un modèle basé sur config["model"], adapté à 80 sorties multilabel (MS COCO).
-    Si config["freeze_backbone"] est True, le backbone est gelé (seule la tête est entraînée).
-    """
     model_name = config["model"].lower()
     pretrained = config.get("pretrained", True)
-    dropout_p = config.get("dropout", 0.3)  # new param in config
+    dropout_p = config.get("dropout", 0.3)
 
     if model_name == "mobilenet_v3_small":
         weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
@@ -107,16 +102,16 @@ def get_model(config, device):
     else:
         raise ValueError(f"Unsupported model: {config['model']}")
 
-    # Freeze backbone si demandé
+    # Freeze backbone if requested
     freeze_backbone = config.get("freeze_backbone", False)
     if freeze_backbone:
         for param in model.parameters():
             param.requires_grad = False
-        # mais on réactive la dernière couche
-        if hasattr(model, "fc"):  # ResNet
+        # activate only the head
+        if hasattr(model, "fc"):
             for param in model.fc.parameters():
                 param.requires_grad = True
-        elif hasattr(model, "classifier"):  # MobileNet / EfficientNet
+        elif hasattr(model, "classifier"):
             for param in model.classifier.parameters():
                 param.requires_grad = True
 
@@ -128,12 +123,8 @@ def get_model(config, device):
 # ============================
 def main():
     # Device
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        print("GPU detected. Using CUDA for training.")
-    else:
-        device = torch.device("cpu")
-        print("⚠ No GPU detected. Training on CPU will be slow.")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Training on {device}.")
 
     # Imports
     from torch.utils.data import DataLoader, random_split
@@ -171,17 +162,21 @@ def main():
     model = get_model(CONFIG, device)
 
     # Loss
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = nn.BCEWithLogitsLoss(pos_weight=None)  # Can add class_weights if needed
 
     # Optimizer
-    if CONFIG["optimizer"].lower() == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
-    elif CONFIG["optimizer"].lower() == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=CONFIG["learning_rate"], weight_decay=CONFIG["weight_decay"])
-    elif CONFIG["optimizer"].lower() == "sgd":
-        optimizer = torch.optim.SGD(model.parameters(), lr=CONFIG["learning_rate"], momentum=0.9)
-    else:
-        raise ValueError(f"Unsupported optimizer: {CONFIG['optimizer']}")
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=CONFIG["learning_rate"],
+        weight_decay=CONFIG["weight_decay"]
+    )
+
+    # LR Scheduler (Cosine Annealing)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=CONFIG["num_epochs"],
+        eta_min=1e-6
+    )
 
     # TensorBoard
     run_name = f"{CONFIG['model']}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -195,15 +190,36 @@ def main():
     for epoch in range(CONFIG["num_epochs"]):
         print(f"\nEpoch {epoch+1}/{CONFIG['num_epochs']}")
 
+        # Unfreeze backbone if staged unfreeze
+        unfreeze_epoch = CONFIG.get("unfreeze_backbone_epoch", None)
+        if unfreeze_epoch is not None and epoch == unfreeze_epoch:
+            print("Unfreezing backbone for fine-tuning.")
+            for name, param in model.named_parameters():
+                param.requires_grad = True
+            # Update optimizer with new params
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=CONFIG.get("unfreeze_learning_rate", CONFIG["learning_rate"]),
+                weight_decay=CONFIG["weight_decay"]
+            )
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=CONFIG["num_epochs"] - unfreeze_epoch,
+                eta_min=1e-6
+            )
+
         # Train
         train_loss = train_loop(train_loader, model, criterion, optimizer, device)
 
         # Validation
-        train_results = validation_loop(train_loader, model, criterion, num_classes=80, device=device, multi_task=True)
-        val_results   = validation_loop(val_loader, model, criterion, num_classes=80, device=device, multi_task=True)
+        train_results = validation_loop(train_loader, model, criterion, num_classes=80, device=device, multi_task=True, threshold=CONFIG["threshold"])
+        val_results   = validation_loop(val_loader, model, criterion, num_classes=80, device=device, multi_task=True, threshold=CONFIG["threshold"])
 
         # Update graphs
         update_graphs(writer, epoch, train_results, val_results)
+
+        # Step scheduler
+        scheduler.step()
 
         # Save best model
         if val_results["f1"] > best_f1:
