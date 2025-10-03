@@ -1,44 +1,47 @@
-# import statements for python, torch and companion libraries and your own modules
+"""
+Main training script for COCO multi-label classification.
+Supports optional freezing of backbone layers.
+"""
+
+import os
+from datetime import datetime
+
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, random_split
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
-import os
-from glob import glob
-from pathlib import Path
-from PIL import Image
-
-# import Jupyter variables 
-from dataset import COCOTrainImageDataset, COCOTestImageDataset
-from loops import train_loop, validation_loop
-from utils import update_graphs
-
-# global variables defining training hyper-parameters among other things, data directories initialization
-from config import CONFIG
-
-# Import model weights
 from torchvision.models import (
     mobilenet_v3_small, MobileNet_V3_Small_Weights,
-    #efficientnet_b0, EfficientNet_B0_Weights,
-    #resnet50, ResNet50_Weights,
-    resnet18, ResNet18_Weights
+    resnet18, ResNet18_Weights,
 )
 
-def get_preprocessing_transform(model_name, train=True, pretrained=True):
+# Local modules
+from dataset import COCOTrainImageDataset, COCOTestImageDataset
+from loops import train_loop, validation_loop
+from utils import (
+    update_graphs,
+    collect_val_probs_and_labels,
+    sweep_thresholds,
+)
+from config import CONFIG
+
+
+# ==============================================================
+# Data preprocessing
+# ==============================================================
+def get_preprocessing_transform(model_name: str, train: bool = True, pretrained: bool = True) -> transforms.Compose:
+    """Return preprocessing transforms depending on model and phase."""
     model_name = model_name.lower()
 
+    # Select normalization weights
     if model_name == "mobilenet_v3_small":
         weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
-    elif model_name == "efficientnet_b0":
-        weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
-    elif model_name == "resnet50":
-        weights = ResNet50_Weights.DEFAULT if pretrained else None
     elif model_name == "resnet18":
         weights = ResNet18_Weights.DEFAULT if pretrained else None
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
-        # If we have pretrained weights, we’ll use their normalization stats
-    # but override the resize/crop to allow custom augmentation
     if weights is not None:
         norm_mean = weights.transforms().mean
         norm_std = weights.transforms().std
@@ -47,201 +50,154 @@ def get_preprocessing_transform(model_name, train=True, pretrained=True):
         norm_std = [0.229, 0.224, 0.225]
 
     if train:
-        # ✅ Stronger augmentation for better generalization
+        # Training transform with augmentation
         return transforms.Compose([
             transforms.RandomResizedCrop(CONFIG["image_size"], scale=(0.8, 1.0)),
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomRotation(degrees=15),
             transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
             transforms.ToTensor(),
-            transforms.Normalize(mean=norm_mean, std=norm_std)
-        ])
-    else:
-        # ✅ Deterministic for validation/test
-        return transforms.Compose([
-            transforms.Resize((CONFIG["image_size"], CONFIG["image_size"])),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=norm_mean, std=norm_std)
+            transforms.Normalize(mean=norm_mean, std=norm_std),
         ])
 
+    # Validation/test transform (deterministic)
+    return transforms.Compose([
+        transforms.Resize((CONFIG["image_size"], CONFIG["image_size"])),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=norm_mean, std=norm_std),
+    ])
 
-def get_model(config, device):
+
+# ==============================================================
+# Model selection and modification
+# ==============================================================
+def get_model(config: dict, device: torch.device, freeze_backbone: bool = False) -> torch.nn.Module:
     """
-    Returns a model instance based on config["model"] and config["pretrained"],
-    with the final classifier adapted for 80 multi-label outputs (MS COCO).
+    Load base model, optionally freeze backbone, and modify classifier for 80 COCO classes.
     """
     model_name = config["model"].lower()
     pretrained = config.get("pretrained", True)
-    
+
     if model_name == "mobilenet_v3_small":
         weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
         model = mobilenet_v3_small(weights=weights)
         in_features = model.classifier[3].in_features
         model.classifier[3] = nn.Sequential(
-            nn.Dropout(p=0.3),              # <-- you can tune p (0.2–0.4)
-            nn.Linear(in_features, 80)
+            nn.Dropout(p=0.3),
+            nn.Linear(in_features, 80),
         )
+        if freeze_backbone:
+            # Freeze all layers except classifier
+            for param in model.features.parameters():
+                param.requires_grad = False
 
-    elif model_name == "efficientnet_b0":
-        weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
-        model = efficientnet_b0(weights=weights)
-        model.classifier[1] = nn.Linear(model.classifier[1].in_features, 80)
-
-    elif model_name == "resnet50":
-        weights = ResNet50_Weights.DEFAULT if pretrained else None
-        model = resnet50(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, 80)
     elif model_name == "resnet18":
         weights = ResNet18_Weights.DEFAULT if pretrained else None
         model = resnet18(weights=weights)
         model.fc = nn.Linear(model.fc.in_features, 80)
-    
+        if freeze_backbone:
+            # Freeze all layers except final fully connected
+            for name, param in model.named_parameters():
+                if "fc" not in name:
+                    param.requires_grad = False
+
     else:
         raise ValueError(f"Unsupported model: {config['model']}")
-    
-    # Move model to device (CPU or GPU)
+
     return model.to(device)
 
-def main():
-    # device initialization
 
-    ## Check if GPU is available
+# ==============================================================
+# Training pipeline
+# ==============================================================
+def main() -> None:
+    """Main training function."""
+    # ---------------- Device setup ----------------
     if torch.cuda.is_available():
         device = torch.device("cuda")
-        print("GPU detected. Using CUDA for training.")
+        print("GPU detected. Using CUDA.")
     else:
-        print("No GPU detected. Training on CPU will be significantly slower. Please be sure of the model you are using before continuing.")
-        choice = input("Do you want to continue using CPU? (y/n): ").strip().lower()
+        print("No GPU detected. Training on CPU.")
+        choice = input("Continue on CPU? (y/n): ").strip().lower()
         if choice == "y":
             device = torch.device("cpu")
-            print("Continuing on CPU...")
         else:
-            print("Exiting program. Please use a machine with GPU.")
-            exit()  # stops the program
+            print("Exiting. Please use a GPU machine.")
+            return
+    print(f"Using device: {device}")
 
-    print("Using device:", device)
-
-    # instantiation of transforms, datasets and data loaders
-    # TIP : use torch.utils.data.random_split to split the training set into train and validation subsets
-
-    ## Transforms
-    from torch.utils.data import DataLoader, random_split
-
-
-    ### Training transform: include optional augmentation
+    # ---------------- Datasets and loaders ----------------
     train_transform = get_preprocessing_transform(CONFIG["model"], train=True)
+    val_transform = get_preprocessing_transform(CONFIG["model"], train=False)
 
-    ### Validation / Test transform: deterministic
-    val_transform   = get_preprocessing_transform(CONFIG["model"], train=False)
-
-    ## Datasets
     full_train_dataset = COCOTrainImageDataset(
         img_dir=CONFIG["train_dir"],
         annotations_dir=CONFIG["label_dir"],
-        transform=train_transform
+        transform=train_transform,
     )
-
     test_dataset = COCOTestImageDataset(
         img_dir=CONFIG["test_dir"],
-        transform=val_transform
+        transform=val_transform,
     )
 
-
-    ## Train/Validation Split
-    val_size = int(CONFIG["validation_split"] * len(full_train_dataset))  # 20% validation
+    val_size = int(CONFIG["validation_split"] * len(full_train_dataset))
     train_size = len(full_train_dataset) - val_size
-
     train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
 
-    ## DataLoaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=CONFIG["batch_size"],
-        shuffle=True,
-        num_workers=CONFIG["max_cpus"]
-    )
+    train_loader = DataLoader(train_dataset, batch_size=CONFIG["batch_size"], shuffle=True, num_workers=CONFIG["max_cpus"])
+    val_loader = DataLoader(val_dataset, batch_size=CONFIG["batch_size"], shuffle=False, num_workers=CONFIG["max_cpus"])
+    test_loader = DataLoader(test_dataset, batch_size=CONFIG["batch_size"], shuffle=False, num_workers=CONFIG["max_cpus"])
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=CONFIG["batch_size"],
-        shuffle=False,
-        num_workers=CONFIG["max_cpus"]
-    )
+    print(f"DataLoaders ready: train={len(train_loader)}, val={len(val_loader)}, test={len(test_loader)}")
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=CONFIG["batch_size"],
-        shuffle=False,
-        num_workers=CONFIG["max_cpus"]
-    )
-
-    print("DataLoaders ready: train={}, val={}, test={}".format(
-        len(train_loader), len(val_loader), len(test_loader)
-    ))
-    
+    # Check sample batch
     image, label = next(iter(train_loader))
-    print(image.shape, label.shape)
+    print(f"Sample batch shapes - images: {image.shape}, labels: {label.shape}")
 
+    # ---------------- Model, loss, optimizer ----------------
+    freeze_backbone = CONFIG.get("freeze_backbone", False)
+    model = get_model(CONFIG, device, freeze_backbone=freeze_backbone)
+    criterion = nn.BCEWithLogitsLoss()
 
-
-    # instantiation and preparation of network model
-    model = get_model(CONFIG, device)
-
-
-    # instantiation of loss criterion
-    criterion = torch.nn.BCEWithLogitsLoss()
-
-    # instantiation of optimizer, registration of network parameters
-    if CONFIG["optimizer"].lower() == "adam":
+    optimizer_name = CONFIG["optimizer"].lower()
+    if optimizer_name == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
-    elif CONFIG["optimizer"].lower() == "adamw":
+    elif optimizer_name == "adamw":
         optimizer = torch.optim.AdamW(model.parameters(), lr=CONFIG["learning_rate"], weight_decay=CONFIG["weight_decay"])
-    elif CONFIG["optimizer"].lower() == "sgd":
+    elif optimizer_name == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=CONFIG["learning_rate"], momentum=0.9)
     else:
         raise ValueError(f"Unsupported optimizer: {CONFIG['optimizer']}")
 
-    # Tensorboard
-    from datetime import datetime
-    from torch.utils.tensorboard import SummaryWriter
-
+    # ---------------- TensorBoard logging ----------------
     run_name = f"{CONFIG['model']}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     writer = SummaryWriter(log_dir=os.path.join("runs", run_name))
-    print(f"TensorBoard logs → runs/{run_name}")
+    print(f"TensorBoard logs at: runs/{run_name}")
 
-
-    # definition of current best model path
+    # ---------------- Training loop ----------------
     best_f1 = 0.0
     best_model_path = "best_model.pth"
 
-    # main training loop
     for epoch in range(CONFIG["num_epochs"]):
-        print(f"\nEpoch {epoch+1}/{CONFIG['num_epochs']}")
-        ## Train
-        train_loss = train_loop(train_loader, model, criterion, optimizer, device)
-        
-        ## Validate
+        print(f"\nEpoch {epoch + 1}/{CONFIG['num_epochs']}")
+
+        _ = train_loop(train_loader, model, criterion, optimizer, device)
         train_results = validation_loop(train_loader, model, criterion, num_classes=80, device=device, multi_task=True)
         val_results = validation_loop(val_loader, model, criterion, num_classes=80, device=device, multi_task=True)
-        
-        ## Update graphs (optional)
+
         update_graphs(writer, epoch, train_results, val_results)
-        
-        ## Save model if better
+        # Each time we save the layer with the best F1 because 
+        # the challenge is about to have the best F1
         if val_results["f1"] > best_f1:
             best_f1 = val_results["f1"]
             torch.save(model.state_dict(), best_model_path)
-            print(f"New best model saved with F1={best_f1:.4f}")
+            print(f"New best model saved with F1 = {best_f1:.4f}")
 
-    # ----- 🔍 Sweep thresholds to find the best F1 on validation -----
-    print("\n🔎 Sweeping thresholds on validation set...")
+    # ---------------- Threshold sweep ----------------
     val_probs, val_labels = collect_val_probs_and_labels(val_loader, model, device)
     best_t, best_f1_sweep, best_prec, best_rec = sweep_thresholds(val_probs, val_labels)
-    print(f"✅ Best threshold = {best_t:.2f} | F1 = {best_f1_sweep:.4f} | "
-          f"Precision = {best_prec:.4f} | Recall = {best_rec:.4f}")
+    print(f"Best threshold = {best_t:.2f} | F1 = {best_f1_sweep:.4f} | Precision = {best_prec:.4f} | Recall = {best_rec:.4f}")
 
-    
-    # close tensorboard SummaryWriter if created (optional)
     writer.close()
 
 
@@ -249,4 +205,3 @@ if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()
     main()
-

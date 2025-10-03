@@ -1,0 +1,19 @@
+{
+    "model": "resnet18",
+    "pretrained": true,
+    "batch_size": 64,
+    "image_size": 224,
+    "num_epochs": 10,
+    "learning_rate": 0.0001,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "threshold": 0.5,
+    "max_cpus": 14,
+    "train_dir": "ms-coco/images/train-resized",
+    "label_dir": "ms-coco/labels/train/train",
+    "test_dir": "ms-coco/images/test-resized",
+    "validation_split": 0.2,
+    "dropout": 0.4
+    
+}
+
